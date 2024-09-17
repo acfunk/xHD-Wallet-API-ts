@@ -1,20 +1,26 @@
 {
-  "name": "bip32-ed25519-ts",
-  "version": "0.0.1",
+  "name": "x-hd-wallet-api-crypto",
+  "version": "0.0.5",
   "description": "A Typescript implementation of BIP-32 Ed25519 for Algorand ARC-52.",
-  "main": "index.js",
+  "main": "./dist/x.hd.wallet.api.crypto.cjs.js",
+  "module": "./dist/x.hd.wallet.api.crypto.esm.js",
+  "types": "./dist/x.hd.wallet.api.crypto.d.ts",
   "scripts": {
     "test": "jest --verbose",
-    "test:cov": "jest --coverage"
+    "test:cov": "jest --coverage",
+    "build": "rollup --config"
   },
   "keywords": [],
   "author": "Algorand Foundation",
   "license": "Apache-2.0",
   "devDependencies": {
+    "@rollup/plugin-typescript": "^11.1.6",
     "@types/jest": "^29.5.5",
     "@types/libsodium-wrappers-sumo": "^0.7.7",
     "@types/node": "^20.7.1",
+    "rollup": "^4.21.3",
     "ts-jest": "^29.1.1",
+    "tslib": "^2.7.0",
     "tweetnacl": "^1.0.3",
     "typescript": "^5.2.2"
   },
@@ -51,5 +57,8 @@
     ],
     "testEnvironment": "node"
   },
-  "repository": "git@github.com:algorandfoundation/bip32-ed25519-ts.git"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/acfunk/xHD-Wallet-API-ts.git"
+  }
 }
