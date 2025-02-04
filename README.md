@@ -19,10 +19,8 @@ Instances of the `XHDWalletAPI` class do not persist sensitive data. However, ma
 async function example() {
   const seed = getSeed();
   const rootKey = fromSeed(seed);
-  seed.fill(0);
   const cryptoService = new XHDWalletAPI();
   const key = await cryptoService.keyGen(rootKey, KeyContext.Address, 0, 0);
-  rootKey.fill(0);
 }
 ```
 
