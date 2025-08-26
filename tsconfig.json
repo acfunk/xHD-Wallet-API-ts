@@ -15,5 +15,6 @@
     "target": "ESNext",
     "skipLibCheck": true,
   },
-  "include": ["./src/**/*"]
+  "include": ["./src/**/*"],
+  "exclude": ["**/*.spec.ts"]
 }
