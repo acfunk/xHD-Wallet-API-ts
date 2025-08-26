@@ -56,12 +56,12 @@ function GetBIP44PathFromContext(context: KeyContext, account:number, key_index:
         case KeyContext.Identity:
             return [harden(44), harden(0), harden(account), 0, key_index]
         default:
-            throw new Error("Invalid context")
+            throw Error("Invalid context")
     }
 }
 
-export const ERROR_BAD_DATA: Error = new Error("Invalid Data")
-export const ERROR_TAGS_FOUND: Error = new Error("Transactions tags found")
+export const ERROR_BAD_DATA: Error = Error("Invalid Data")
+export const ERROR_TAGS_FOUND: Error = Error("Transactions tags found")
 
 export class XHDWalletAPI {
 
@@ -228,7 +228,7 @@ export class XHDWalletAPI {
                 decoded = message
                 break
             default:
-                throw new Error("Invalid encoding")
+                throw Error("Invalid encoding")
         }
 
         // validate with schema
