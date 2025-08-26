@@ -8,7 +8,7 @@ import {
     crypto_sign_ed25519_pk_to_curve25519,
     crypto_scalarmult,
     crypto_generichash,
-} from './sumo.js';
+} from './sumo.facade.js';
 import * as msgpack from "algo-msgpack-with-bigint"
 import Ajv from "ajv"
 //@ts-expect-error, we handle this with ts-alias

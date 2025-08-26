@@ -3,7 +3,7 @@ import { createHash, createHmac } from "crypto";
 import {
   crypto_core_ed25519_add,
   crypto_scalarmult_ed25519_base_noclamp,
-} from "./sumo.js";
+} from "./sumo.facade.js";
 import BN from 'bn.js'
 import * as util from 'util'
 
