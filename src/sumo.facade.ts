@@ -1,9 +1,9 @@
-import { ed25519, x25519, edwardsToMontgomeryPub, edwardsToMontgomeryPriv } from '@noble/curves/ed25519';
-import { sha512 } from '@noble/hashes/sha2';
-import { blake2b } from '@noble/hashes/blake2';
-import { mod } from '@noble/curves/abstract/modular';
-import { bytesToNumberLE, numberToBytesLE } from '@noble/curves/utils';
-import { createHash, createCipheriv, createDecipheriv, randomBytes } from 'crypto';
+import { ed25519, x25519 } from '@noble/curves/ed25519.js';
+import { sha512 } from '@noble/hashes/sha2.js';
+import { blake2b } from '@noble/hashes/blake2.js';
+import { mod } from '@noble/curves/abstract/modular.js';
+import { bytesToNumberLE, numberToBytesLE } from '@noble/curves/utils.js';
+import { createCipheriv, createDecipheriv } from 'crypto';
 
 // Type definitions matching libsodium interfaces
 export interface KeyPair {
@@ -40,7 +40,7 @@ export function crypto_sign_verify_detached(
  * Generate an Ed25519 keypair
  */
 export function crypto_sign_keypair(): KeyPair {
-  const privateKey = ed25519.utils.randomPrivateKey();
+  const privateKey = ed25519.utils.randomSecretKey();
   const publicKey = ed25519.getPublicKey(privateKey);
   
   return {
@@ -65,14 +65,14 @@ export function crypto_scalarmult_ed25519_base_noclamp(scalar: Uint8Array): Uint
     // Ensure scalar is in valid range [1, curve.n)
     // If scalar is 0 or >= curve.n, reduce it modulo curve.n
     let validScalar = scalarBigint;
-    if (validScalar === 0n || validScalar >= ed25519.CURVE.n) {
-      validScalar = mod(scalarBigint, ed25519.CURVE.n);
+    if (validScalar === 0n || validScalar >= ed25519.Point.Fn.ORDER) {
+      validScalar = mod(scalarBigint, ed25519.Point.Fn.ORDER);
       if (validScalar === 0n) {
         validScalar = 1n; // Ensure we don't have zero scalar
       }
     }
     
-    const point = ed25519.ExtendedPoint.BASE.multiply(validScalar);
+    const point = ed25519.Point.BASE.multiply(validScalar);
     return point.toBytes();
   } catch (error) {
     throw new Error(`crypto_scalarmult_ed25519_base_noclamp failed: ${error}`);
@@ -84,10 +84,10 @@ export function crypto_scalarmult_ed25519_base_noclamp(scalar: Uint8Array): Uint
  */
 export function crypto_core_ed25519_add(pointA: Uint8Array, pointB: Uint8Array): Uint8Array {
   try {
-    const a = ed25519.ExtendedPoint.fromBytes(pointA);
-    const b = ed25519.ExtendedPoint.fromBytes(pointB);
+    const a = ed25519.Point.fromBytes(pointA);
+    const b = ed25519.Point.fromBytes(pointB);
     const result = a.add(b);
-    return result.toRawBytes();
+    return result.toBytes();
   } catch (error) {
     throw new Error(`crypto_core_ed25519_add failed: ${error}`);
   }
@@ -105,7 +105,7 @@ export function crypto_core_ed25519_scalar_add(scalarA: Uint8Array, scalarB: Uin
     // Convert little-endian bytes to bigint
     const a = bytesToNumberLE(scalarA);
     const b = bytesToNumberLE(scalarB);
-    const result = mod(a + b, ed25519.CURVE.n);
+    const result = mod(a + b, ed25519.Point.Fn.ORDER);
     
     // Convert back to little-endian bytes
     return numberToBytesLE(result, 32);
@@ -121,7 +121,7 @@ export function crypto_core_ed25519_scalar_mul(scalarA: Uint8Array, scalarB: Uin
   try {
     const a = bytesToNumberLE(scalarA);
     const b = bytesToNumberLE(scalarB);
-    const result = mod(a * b, ed25519.CURVE.n);
+    const result = mod(a * b, ed25519.Point.Fn.ORDER);
     
     return numberToBytesLE(result, 32);
   } catch (error) {
@@ -135,7 +135,7 @@ export function crypto_core_ed25519_scalar_mul(scalarA: Uint8Array, scalarB: Uin
 export function crypto_core_ed25519_scalar_reduce(scalar: Uint8Array): Uint8Array {
   try {
     const scalarNum = bytesToNumberLE(scalar);
-    const result = mod(scalarNum, ed25519.CURVE.n);
+    const result = mod(scalarNum, ed25519.Point.Fn.ORDER);
     
     return numberToBytesLE(result, 32);
   } catch (error) {
@@ -152,7 +152,7 @@ export function crypto_core_ed25519_scalar_reduce(scalar: Uint8Array): Uint8Arra
  */
 export function crypto_scalarmult(privateKey: Uint8Array, publicKey: Uint8Array): Uint8Array {
   try {
-    return x25519.scalarMult(privateKey, publicKey);
+    return x25519.getSharedSecret(privateKey, publicKey);
   } catch (error) {
     throw new Error(`crypto_scalarmult failed: ${error}`);
   }
@@ -163,7 +163,7 @@ export function crypto_scalarmult(privateKey: Uint8Array, publicKey: Uint8Array)
  */
 export function crypto_sign_ed25519_pk_to_curve25519(edPubKey: Uint8Array): Uint8Array {
   try {
-    return edwardsToMontgomeryPub(edPubKey);
+    return ed25519.utils.toMontgomery(edPubKey);
   } catch (error) {
     throw new Error(`crypto_sign_ed25519_pk_to_curve25519 failed: ${error}`);
   }
@@ -177,7 +177,7 @@ export function crypto_sign_ed25519_sk_to_curve25519(edPrivKey: Uint8Array): Uin
     // Ed25519 private key is 32 bytes (the seed)
     // Extract just the seed (first 32 bytes) since edwardsToMontgomeryPriv expects 32 bytes
     const seed = edPrivKey.slice(0, 32);
-    return edwardsToMontgomeryPriv(seed);
+    return ed25519.utils.toMontgomerySecret(seed);
   } catch (error) {
     throw new Error(`crypto_sign_ed25519_sk_to_curve25519 failed: ${error}`);
   }
