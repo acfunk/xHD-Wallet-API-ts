@@ -1,7 +1,7 @@
 import { to_base64, crypto_kx_client_session_keys, crypto_kx_server_session_keys, crypto_scalarmult, crypto_scalarmult_ed25519_base_noclamp, crypto_secretbox_easy, crypto_secretbox_open_easy, crypto_sign_ed25519_pk_to_curve25519, crypto_sign_ed25519_sk_to_curve25519, crypto_sign_keypair} from './sumo.facade.js'
 import type { CryptoKX, KeyPair} from "./sumo.facade.js"
 
-import * as bip39 from "bip39"
+import * as bip39 from "@scure/bip39"
 import { randomBytes } from "crypto"
 import { BIP32DerivationType, XHDWalletAPI, ERROR_TAGS_FOUND, Encoding, KeyContext, SignMetadata, harden } from "./x.hd.wallet.api.crypto.js"
 import * as msgpack from "algo-msgpack-with-bigint"
@@ -46,7 +46,7 @@ describe("Contextual Derivation & Signing", () => {
     let rootKey: Uint8Array
 
     beforeAll(() => {
-        rootKey = fromSeed( bip39.mnemonicToSeedSync(bip39Mnemonic, ""))
+        rootKey = fromSeed( Buffer.from(bip39.mnemonicToSeedSync(bip39Mnemonic, "")))
     })
 
 	beforeEach(() => {
@@ -388,8 +388,8 @@ describe("Contextual Derivation & Signing", () => {
             let aliceRootKey: Uint8Array
             let bobRootKey: Uint8Array
             beforeEach(() => {
-                aliceRootKey = fromSeed(bip39.mnemonicToSeedSync("exact remain north lesson program series excess lava material second riot error boss planet brick rotate scrap army riot banner adult fashion casino bamboo", ""))
-                bobRootKey = fromSeed(bip39.mnemonicToSeedSync("identify length ranch make silver fog much puzzle borrow relax occur drum blue oval book pledge reunion coral grace lamp recall fever route carbon", ""))
+                aliceRootKey = fromSeed(Buffer.from(bip39.mnemonicToSeedSync("exact remain north lesson program series excess lava material second riot error boss planet brick rotate scrap army riot banner adult fashion casino bamboo", "")))
+                bobRootKey = fromSeed(Buffer.from(bip39.mnemonicToSeedSync("identify length ranch make silver fog much puzzle borrow relax occur drum blue oval book pledge reunion coral grace lamp recall fever route carbon", "")))
             })
 
             it("\(OK) ECDH", async () => {
