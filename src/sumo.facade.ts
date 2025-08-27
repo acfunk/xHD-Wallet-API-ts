@@ -3,7 +3,7 @@ import { sha512 } from "@noble/hashes/sha2.js";
 import { blake2b } from "@noble/hashes/blake2.js";
 import { mod } from "@noble/curves/abstract/modular.js";
 import { bytesToNumberLE, numberToBytesLE } from "@noble/curves/utils.js";
-import { createCipheriv, createDecipheriv } from "crypto";
+import { chacha20poly1305 } from "@noble/ciphers/chacha.js";
 
 // Type definitions matching libsodium interfaces
 export interface KeyPair {
@@ -272,64 +272,51 @@ export function crypto_kx_server_session_keys(
 // ===========================
 
 /**
- * Encrypt a message using ChaCha20Poly1305 (simplified implementation using Node.js crypto)
+ * Encrypt a message using ChaCha20Poly1305
  */
 export function crypto_secretbox_easy(
   message: Uint8Array,
   nonce: Uint8Array,
   key: Uint8Array
 ): Uint8Array {
-  // Using AES-256-GCM as a replacement for ChaCha20Poly1305
-  // This maintains the same security properties
-  const iv = Buffer.from(nonce.slice(0, 12)); // Use first 12 bytes of nonce as IV
-  const cipher = createCipheriv("aes-256-gcm", Buffer.from(key), iv);
-  cipher.setAAD(Buffer.from(nonce)); // Use full nonce as additional authenticated data
+  // ChaCha20Poly1305 expects exactly 12-byte nonce
+  // If nonce is shorter, pad with zeros; if longer, take first 12 bytes
+  const nonce12 = new Uint8Array(12);
+  if (nonce.length >= 12) {
+    nonce12.set(nonce.slice(0, 12));
+  } else {
+    nonce12.set(nonce);
+    // Remaining bytes are already zero from initialization
+  }
 
-  const encrypted = Buffer.concat([
-    cipher.update(Buffer.from(message)),
-    cipher.final(),
-  ]);
-  const tag = cipher.getAuthTag();
+  // Encrypt the message (returns ciphertext + 16-byte authentication tag)
+  const encrypted = chacha20poly1305(key, nonce12).encrypt(message);
 
-  // Concatenate IV, encrypted data and authentication tag
-  const result = new Uint8Array(iv.length + encrypted.length + tag.length);
-  result.set(iv, 0);
-  result.set(encrypted, iv.length);
-  result.set(tag, iv.length + encrypted.length);
-
-  return result;
+  return encrypted;
 }
 
 /**
- * Decrypt a message using ChaCha20Poly1305 (simplified implementation using Node.js crypto)
+ * Decrypt a message using ChaCha20Poly1305
  */
 export function crypto_secretbox_open_easy(
   ciphertext: Uint8Array,
   nonce: Uint8Array,
   key: Uint8Array
 ): Uint8Array {
-  // Split IV, encrypted data and authentication tag
-  const ivLength = 12; // GCM IV is 12 bytes
-  const tagLength = 16; // GCM tag is 16 bytes
+  // ChaCha20Poly1305 expects exactly 12-byte nonce
+  // If nonce is shorter, pad with zeros; if longer, take first 12 bytes
+  const nonce12 = new Uint8Array(12);
+  if (nonce.length >= 12) {
+    nonce12.set(nonce.slice(0, 12));
+  } else {
+    nonce12.set(nonce);
+    // Remaining bytes are already zero from initialization
+  }
 
-  const iv = ciphertext.slice(0, ivLength);
-  const encrypted = ciphertext.slice(ivLength, -tagLength);
-  const tag = ciphertext.slice(-tagLength);
+  // Decrypt the message (ciphertext includes 16-byte authentication tag)
+  const decrypted = chacha20poly1305(key, nonce12).decrypt(ciphertext);
 
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    Buffer.from(key),
-    Buffer.from(iv)
-  );
-  decipher.setAAD(Buffer.from(nonce));
-  decipher.setAuthTag(Buffer.from(tag));
-
-  const decrypted = Buffer.concat([
-    decipher.update(Buffer.from(encrypted)),
-    decipher.final(),
-  ]);
-
-  return new Uint8Array(decrypted);
+  return decrypted;
 }
 
 // ===========================
