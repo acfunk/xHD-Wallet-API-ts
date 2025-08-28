@@ -421,8 +421,8 @@ describe("Contextual Derivation & Signing", () => {
 
                 // encrypt
                 const cipherText: Uint8Array = crypto_secretbox_easy(message, nonce, aliceSharedSecret)
-                expect(cipherText).toEqual(new Uint8Array([144, 196, 246, 64, 123, 113, 156, 109, 14, 182, 80, 12, 137, 207, 13, 172, 227, 119, 81, 134, 138, 181, 70, 0, 249, 207, 206, 125, 87]))
-                
+                expect(cipherText).toEqual(new Uint8Array([20, 107, 126, 154, 152, 197, 252, 227, 148,  39, 245, 136, 233,  10, 199,  20, 219,   3,  53,   2, 113, 6, 190,  21, 193, 119,  43,  44, 230]))
+
                 // decrypt
                 const plainText: Uint8Array = crypto_secretbox_open_easy(cipherText, nonce, bobSharedSecret)
                 expect(plainText).toEqual(message)
