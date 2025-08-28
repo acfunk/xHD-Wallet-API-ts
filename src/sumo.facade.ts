@@ -3,9 +3,12 @@ import { sha512 } from "@noble/hashes/sha2.js";
 import { blake2b } from "@noble/hashes/blake2.js";
 import { mod } from "@noble/curves/abstract/modular.js";
 import { bytesToNumberLE, numberToBytesLE } from "@noble/curves/utils.js";
-import { createCipheriv, createDecipheriv } from "crypto";
+import { xsalsa20poly1305 } from "@noble/ciphers/salsa.js";
 
-// Type definitions matching libsodium interfaces
+// ===========================
+// Libsodium Type Definitions
+// ===========================
+
 export interface KeyPair {
   publicKey: Uint8Array;
   privateKey: Uint8Array;
@@ -16,6 +19,24 @@ export interface CryptoKX {
   sharedRx: Uint8Array;
   sharedTx: Uint8Array;
 }
+
+// ===========================
+// Libsodium Constants
+// ===========================
+
+const crypto_secretbox_KEYBYTES = 32;
+const crypto_secretbox_NONCEBYTES = 24;
+const crypto_secretbox_MACBYTES = 16;
+const crypto_sign_PUBLICKEYBYTES = 32;
+const crypto_sign_SECRETKEYBYTES = 64;
+const crypto_scalarmult_ed25519_BYTES = 32;
+const crypto_scalarmult_ed25519_SCALARBYTES = 32;
+const crypto_kx_PUBLICKEYBYTES = 32;
+const crypto_kx_SECRETKEYBYTES = 32;
+const crypto_kx_SESSIONKEYBYTES = 32;
+const crypto_generichash_BYTES_MIN = 16;
+const crypto_generichash_BYTES_MAX = 64;
+const crypto_hash_sha512_BYTES = 64;
 
 // ===========================
 // Ed25519 Signature Functions
@@ -29,6 +50,14 @@ export function crypto_sign_verify_detached(
   message: Uint8Array,
   publicKey: Uint8Array
 ): boolean {
+  // Input validation
+  if (signature.length !== 64) {
+    return false; // Invalid signature length
+  }
+  if (publicKey.length !== crypto_sign_PUBLICKEYBYTES) {
+    return false; // Invalid public key length
+  }
+
   try {
     return ed25519.verify(signature, message, publicKey);
   } catch (error) {
@@ -40,12 +69,17 @@ export function crypto_sign_verify_detached(
  * Generate an Ed25519 keypair
  */
 export function crypto_sign_keypair(): KeyPair {
-  const privateKey = ed25519.utils.randomSecretKey();
-  const publicKey = ed25519.getPublicKey(privateKey);
+  const seed = ed25519.utils.randomSecretKey(); // 32-byte seed
+  const publicKey = ed25519.getPublicKey(seed); // 32-byte public key
+
+  // Create 64-byte private key: seed (32 bytes) + public key (32 bytes)
+  const privateKey = new Uint8Array(crypto_sign_SECRETKEYBYTES);
+  privateKey.set(seed, 0); // First 32 bytes: seed
+  privateKey.set(publicKey, 32); // Last 32 bytes: public key
 
   return {
     publicKey: new Uint8Array(publicKey),
-    privateKey: new Uint8Array(privateKey),
+    privateKey: privateKey,
     keyType: "ed25519",
   };
 }
@@ -60,21 +94,46 @@ export function crypto_sign_keypair(): KeyPair {
 export function crypto_scalarmult_ed25519_base_noclamp(
   scalar: Uint8Array
 ): Uint8Array {
+  // Input validation - only validate length
+  if (scalar.length !== crypto_scalarmult_ed25519_SCALARBYTES) {
+    throw new Error(
+      `scalar must be ${crypto_scalarmult_ed25519_SCALARBYTES} bytes`
+    );
+  }
+
   // Convert scalar bytes to bigint (little-endian)
   const scalarBigint = bytesToNumberLE(scalar);
 
-  // Ensure scalar is in valid range [1, curve.n)
-  // If scalar is 0 or >= curve.n, reduce it modulo curve.n
-  let validScalar = scalarBigint;
-  if (validScalar === 0n || validScalar >= ed25519.Point.Fn.ORDER) {
-    validScalar = mod(scalarBigint, ed25519.Point.Fn.ORDER);
-    if (validScalar === 0n) {
-      validScalar = 1n; // Ensure we don't have zero scalar
-    }
-  }
+  try {
+    // Try multiplication directly without any validation
+    const point = ed25519.Point.BASE.multiply(scalarBigint);
+    return point.toBytes();
+  } catch (error) {
+    // Handle edge cases that libsodium noclamp supports but noble/curves rejects
+    // This matches libsodium's noclamp behavior for invalid scalars
 
-  const point = ed25519.Point.BASE.multiply(validScalar);
-  return point.toBytes();
+    // If scalar is 0, return identity point
+    if (scalarBigint === 0n) {
+      // Identity point in Ed25519: (0, 1) which compresses to 0x01 followed by zeros
+      const identity = new Uint8Array(32);
+      identity[0] = 1; // y-coordinate = 1, sign bit = 0
+      return identity;
+    }
+
+    // For other edge cases (scalar >= curve order), reduce modulo curve order
+    // This maintains compatibility with libsodium's noclamp behavior
+    const reducedScalar = mod(scalarBigint, ed25519.Point.Fn.ORDER);
+
+    // Handle reduced scalar of 0 after modular reduction
+    if (reducedScalar === 0n) {
+      const identity = new Uint8Array(32);
+      identity[0] = 1;
+      return identity;
+    }
+
+    const point = ed25519.Point.BASE.multiply(reducedScalar);
+    return point.toBytes();
+  }
 }
 
 /**
@@ -84,10 +143,22 @@ export function crypto_core_ed25519_add(
   pointA: Uint8Array,
   pointB: Uint8Array
 ): Uint8Array {
-  const a = ed25519.Point.fromBytes(pointA);
-  const b = ed25519.Point.fromBytes(pointB);
-  const result = a.add(b);
-  return result.toBytes();
+  // Input validation
+  if (pointA.length !== crypto_scalarmult_ed25519_BYTES) {
+    throw new Error(`point A must be ${crypto_scalarmult_ed25519_BYTES} bytes`);
+  }
+  if (pointB.length !== crypto_scalarmult_ed25519_BYTES) {
+    throw new Error(`point B must be ${crypto_scalarmult_ed25519_BYTES} bytes`);
+  }
+
+  try {
+    const a = ed25519.Point.fromBytes(pointA);
+    const b = ed25519.Point.fromBytes(pointB);
+    const result = a.add(b);
+    return result.toBytes();
+  } catch (error) {
+    throw new Error("invalid point");
+  }
 }
 
 // ===========================
@@ -101,6 +172,18 @@ export function crypto_core_ed25519_scalar_add(
   scalarA: Uint8Array,
   scalarB: Uint8Array
 ): Uint8Array {
+  // Input validation
+  if (scalarA.length !== crypto_scalarmult_ed25519_SCALARBYTES) {
+    throw new Error(
+      `scalar A must be ${crypto_scalarmult_ed25519_SCALARBYTES} bytes`
+    );
+  }
+  if (scalarB.length !== crypto_scalarmult_ed25519_SCALARBYTES) {
+    throw new Error(
+      `scalar B must be ${crypto_scalarmult_ed25519_SCALARBYTES} bytes`
+    );
+  }
+
   // Convert little-endian bytes to bigint
   const a = bytesToNumberLE(scalarA);
   const b = bytesToNumberLE(scalarB);
@@ -117,6 +200,18 @@ export function crypto_core_ed25519_scalar_mul(
   scalarA: Uint8Array,
   scalarB: Uint8Array
 ): Uint8Array {
+  // Input validation
+  if (scalarA.length !== crypto_scalarmult_ed25519_SCALARBYTES) {
+    throw new Error(
+      `scalar A must be ${crypto_scalarmult_ed25519_SCALARBYTES} bytes`
+    );
+  }
+  if (scalarB.length !== crypto_scalarmult_ed25519_SCALARBYTES) {
+    throw new Error(
+      `scalar B must be ${crypto_scalarmult_ed25519_SCALARBYTES} bytes`
+    );
+  }
+
   const a = bytesToNumberLE(scalarA);
   const b = bytesToNumberLE(scalarB);
   const result = mod(a * b, ed25519.Point.Fn.ORDER);
@@ -130,6 +225,9 @@ export function crypto_core_ed25519_scalar_mul(
 export function crypto_core_ed25519_scalar_reduce(
   scalar: Uint8Array
 ): Uint8Array {
+  // crypto_core_ed25519_scalar_reduce can handle inputs of any size, commonly 64 bytes from hash output
+  // No length validation needed, matches libsodium behavior
+
   const scalarNum = bytesToNumberLE(scalar);
   const result = mod(scalarNum, ed25519.Point.Fn.ORDER);
 
@@ -147,6 +245,14 @@ export function crypto_scalarmult(
   privateKey: Uint8Array,
   publicKey: Uint8Array
 ): Uint8Array {
+  // Input validation
+  if (privateKey.length !== crypto_kx_SECRETKEYBYTES) {
+    throw new Error(`private key must be ${crypto_kx_SECRETKEYBYTES} bytes`);
+  }
+  if (publicKey.length !== crypto_kx_PUBLICKEYBYTES) {
+    throw new Error(`public key must be ${crypto_kx_PUBLICKEYBYTES} bytes`);
+  }
+
   return x25519.getSharedSecret(privateKey, publicKey);
 }
 
@@ -156,6 +262,13 @@ export function crypto_scalarmult(
 export function crypto_sign_ed25519_pk_to_curve25519(
   edPubKey: Uint8Array
 ): Uint8Array {
+  // Input validation
+  if (edPubKey.length !== crypto_sign_PUBLICKEYBYTES) {
+    throw new Error(
+      `Ed25519 public key must be ${crypto_sign_PUBLICKEYBYTES} bytes`
+    );
+  }
+
   return ed25519.utils.toMontgomery(edPubKey);
 }
 
@@ -165,7 +278,13 @@ export function crypto_sign_ed25519_pk_to_curve25519(
 export function crypto_sign_ed25519_sk_to_curve25519(
   edPrivKey: Uint8Array
 ): Uint8Array {
-  // Ed25519 private key is 32 bytes (the seed)
+  // Input validation - Ed25519 private key should be 64 bytes (seed + public key)
+  if (edPrivKey.length !== crypto_sign_SECRETKEYBYTES) {
+    throw new Error(
+      `Ed25519 private key must be ${crypto_sign_SECRETKEYBYTES} bytes`
+    );
+  }
+
   // Extract just the seed (first 32 bytes) since edwardsToMontgomeryPriv expects 32 bytes
   const seed = edPrivKey.slice(0, 32);
   return ed25519.utils.toMontgomerySecret(seed);
@@ -179,7 +298,12 @@ export function crypto_sign_ed25519_sk_to_curve25519(
  * SHA-512 hash function
  */
 export function crypto_hash_sha512(message: Uint8Array): Uint8Array {
-  return sha512(message);
+  const result = sha512(message);
+  // Ensure result is exactly 64 bytes
+  if (result.length !== crypto_hash_sha512_BYTES) {
+    throw new Error(`SHA-512 hash must be ${crypto_hash_sha512_BYTES} bytes`);
+  }
+  return result;
 }
 
 /**
@@ -191,6 +315,16 @@ export function crypto_generichash(
   message: Uint8Array,
   key: Uint8Array | null = null
 ): Uint8Array {
+  // Input validation
+  if (
+    outputLength < crypto_generichash_BYTES_MIN ||
+    outputLength > crypto_generichash_BYTES_MAX
+  ) {
+    throw new Error(
+      `output length must be between ${crypto_generichash_BYTES_MIN} and ${crypto_generichash_BYTES_MAX} bytes`
+    );
+  }
+
   if (key) {
     return blake2b(message, { key, dkLen: outputLength });
   }
@@ -209,28 +343,43 @@ export function crypto_kx_client_session_keys(
   clientPriv: Uint8Array,
   serverPub: Uint8Array
 ): CryptoKX {
-  // Perform ECDH
-  const sharedSecret = x25519.scalarMult(clientPriv, serverPub);
+  // Input validation
+  if (clientPub.length !== crypto_kx_PUBLICKEYBYTES) {
+    throw new Error(
+      `client public key must be ${crypto_kx_PUBLICKEYBYTES} bytes`
+    );
+  }
+  if (clientPriv.length !== crypto_kx_SECRETKEYBYTES) {
+    throw new Error(
+      `client private key must be ${crypto_kx_SECRETKEYBYTES} bytes`
+    );
+  }
+  if (serverPub.length !== crypto_kx_PUBLICKEYBYTES) {
+    throw new Error(
+      `server public key must be ${crypto_kx_PUBLICKEYBYTES} bytes`
+    );
+  }
 
-  // Derive session keys using BLAKE2b
-  const sessionKeyMaterial = new Uint8Array(
-    clientPub.length + serverPub.length + sharedSecret.length
-  );
-  sessionKeyMaterial.set(clientPub, 0);
-  sessionKeyMaterial.set(serverPub, clientPub.length);
-  sessionKeyMaterial.set(sharedSecret, clientPub.length + serverPub.length);
+  // Step 1: Perform X25519 ECDH to get shared secret
+  const sharedSecret = x25519.getSharedSecret(clientPriv, serverPub);
 
-  // Generate rx and tx keys
-  const rxKey = blake2b(new Uint8Array([...sessionKeyMaterial, 0]), {
-    dkLen: 32,
-  });
-  const txKey = blake2b(new Uint8Array([...sessionKeyMaterial, 1]), {
-    dkLen: 32,
-  });
+  // Step 2: Create key material = shared_secret + client_pk + server_pk (96 bytes)
+  // This matches libsodium's exact concatenation order
+  const keyMaterial = new Uint8Array(96);
+  keyMaterial.set(sharedSecret, 0); // shared_secret (32 bytes)
+  keyMaterial.set(clientPub, 32); // client_pk (32 bytes)
+  keyMaterial.set(serverPub, 64); // server_pk (32 bytes)
+
+  // Step 3: BLAKE2B-512 hash to get 64-byte result
+  const hash = blake2b(keyMaterial, { dkLen: 64 });
+
+  // Step 4: Split into rx (first 32 bytes) and tx (last 32 bytes) for client
+  const sharedRx = hash.slice(0, 32);
+  const sharedTx = hash.slice(32, 64);
 
   return {
-    sharedRx: rxKey,
-    sharedTx: txKey,
+    sharedRx: sharedRx,
+    sharedTx: sharedTx,
   };
 }
 
@@ -242,28 +391,43 @@ export function crypto_kx_server_session_keys(
   serverPriv: Uint8Array,
   clientPub: Uint8Array
 ): CryptoKX {
-  // Perform ECDH
-  const sharedSecret = x25519.scalarMult(serverPriv, clientPub);
+  // Input validation
+  if (serverPub.length !== crypto_kx_PUBLICKEYBYTES) {
+    throw new Error(
+      `server public key must be ${crypto_kx_PUBLICKEYBYTES} bytes`
+    );
+  }
+  if (serverPriv.length !== crypto_kx_SECRETKEYBYTES) {
+    throw new Error(
+      `server private key must be ${crypto_kx_SECRETKEYBYTES} bytes`
+    );
+  }
+  if (clientPub.length !== crypto_kx_PUBLICKEYBYTES) {
+    throw new Error(
+      `client public key must be ${crypto_kx_PUBLICKEYBYTES} bytes`
+    );
+  }
 
-  // Derive session keys using BLAKE2b (note: swapped order compared to client)
-  const sessionKeyMaterial = new Uint8Array(
-    clientPub.length + serverPub.length + sharedSecret.length
-  );
-  sessionKeyMaterial.set(clientPub, 0);
-  sessionKeyMaterial.set(serverPub, clientPub.length);
-  sessionKeyMaterial.set(sharedSecret, clientPub.length + serverPub.length);
+  // Step 1: Perform X25519 ECDH to get shared secret
+  const sharedSecret = x25519.getSharedSecret(serverPriv, clientPub);
 
-  // Generate rx and tx keys (swapped compared to client)
-  const rxKey = blake2b(new Uint8Array([...sessionKeyMaterial, 1]), {
-    dkLen: 32,
-  });
-  const txKey = blake2b(new Uint8Array([...sessionKeyMaterial, 0]), {
-    dkLen: 32,
-  });
+  // Step 2: Create key material = shared_secret + client_pk + server_pk (96 bytes)
+  // Same concatenation order as client (libsodium specification)
+  const keyMaterial = new Uint8Array(96);
+  keyMaterial.set(sharedSecret, 0); // shared_secret (32 bytes)
+  keyMaterial.set(clientPub, 32); // client_pk (32 bytes)
+  keyMaterial.set(serverPub, 64); // server_pk (32 bytes)
+
+  // Step 3: BLAKE2B-512 hash to get 64-byte result
+  const hash = blake2b(keyMaterial, { dkLen: 64 });
+
+  // Step 5: Server swaps rx/tx (server rx = client tx, server tx = client rx)
+  const sharedRx = hash.slice(32, 64); // Server rx = client tx (last 32 bytes)
+  const sharedTx = hash.slice(0, 32); // Server tx = client rx (first 32 bytes)
 
   return {
-    sharedRx: rxKey,
-    sharedTx: txKey,
+    sharedRx: sharedRx,
+    sharedTx: sharedTx,
   };
 }
 
@@ -272,64 +436,53 @@ export function crypto_kx_server_session_keys(
 // ===========================
 
 /**
- * Encrypt a message using ChaCha20Poly1305 (simplified implementation using Node.js crypto)
+ * Encrypt a message using XSalsa20Poly1305
  */
 export function crypto_secretbox_easy(
   message: Uint8Array,
   nonce: Uint8Array,
   key: Uint8Array
 ): Uint8Array {
-  // Using AES-256-GCM as a replacement for ChaCha20Poly1305
-  // This maintains the same security properties
-  const iv = Buffer.from(nonce.slice(0, 12)); // Use first 12 bytes of nonce as IV
-  const cipher = createCipheriv("aes-256-gcm", Buffer.from(key), iv);
-  cipher.setAAD(Buffer.from(nonce)); // Use full nonce as additional authenticated data
+  // Input validation
+  if (key.length !== crypto_secretbox_KEYBYTES) {
+    throw new Error(`key must be ${crypto_secretbox_KEYBYTES} bytes`);
+  }
+  if (nonce.length !== crypto_secretbox_NONCEBYTES) {
+    throw new Error(`nonce must be ${crypto_secretbox_NONCEBYTES} bytes`);
+  }
 
-  const encrypted = Buffer.concat([
-    cipher.update(Buffer.from(message)),
-    cipher.final(),
-  ]);
-  const tag = cipher.getAuthTag();
+  // Encrypt the message using XSalsa20Poly1305
+  const encrypted = xsalsa20poly1305(key, nonce).encrypt(message);
 
-  // Concatenate IV, encrypted data and authentication tag
-  const result = new Uint8Array(iv.length + encrypted.length + tag.length);
-  result.set(iv, 0);
-  result.set(encrypted, iv.length);
-  result.set(tag, iv.length + encrypted.length);
-
-  return result;
+  return encrypted;
 }
 
 /**
- * Decrypt a message using ChaCha20Poly1305 (simplified implementation using Node.js crypto)
+ * Decrypt a message using XSalsa20Poly1305
  */
 export function crypto_secretbox_open_easy(
   ciphertext: Uint8Array,
   nonce: Uint8Array,
   key: Uint8Array
 ): Uint8Array {
-  // Split IV, encrypted data and authentication tag
-  const ivLength = 12; // GCM IV is 12 bytes
-  const tagLength = 16; // GCM tag is 16 bytes
+  // Input validation
+  if (key.length !== crypto_secretbox_KEYBYTES) {
+    throw new Error(`key must be ${crypto_secretbox_KEYBYTES} bytes`);
+  }
+  if (nonce.length !== crypto_secretbox_NONCEBYTES) {
+    throw new Error(`nonce must be ${crypto_secretbox_NONCEBYTES} bytes`);
+  }
+  if (ciphertext.length < crypto_secretbox_MACBYTES) {
+    throw new Error(`ciphertext too short`);
+  }
 
-  const iv = ciphertext.slice(0, ivLength);
-  const encrypted = ciphertext.slice(ivLength, -tagLength);
-  const tag = ciphertext.slice(-tagLength);
-
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    Buffer.from(key),
-    Buffer.from(iv)
-  );
-  decipher.setAAD(Buffer.from(nonce));
-  decipher.setAuthTag(Buffer.from(tag));
-
-  const decrypted = Buffer.concat([
-    decipher.update(Buffer.from(encrypted)),
-    decipher.final(),
-  ]);
-
-  return new Uint8Array(decrypted);
+  try {
+    // Decrypt the message using XSalsa20Poly1305
+    const decrypted = xsalsa20poly1305(key, nonce).decrypt(ciphertext);
+    return decrypted;
+  } catch (error) {
+    throw new Error("decryption failed");
+  }
 }
 
 // ===========================
@@ -337,11 +490,16 @@ export function crypto_secretbox_open_easy(
 // ===========================
 
 /**
- * Convert bytes or string to base64 string
+ * Convert bytes or string to base64 string (without padding to match libsodium)
  */
 export function to_base64(data: Uint8Array | string): string {
+  let base64: string;
   if (typeof data === "string") {
-    return Buffer.from(data, "utf8").toString("base64");
+    base64 = Buffer.from(data, "utf8").toString("base64");
+  } else {
+    base64 = Buffer.from(data).toString("base64");
   }
-  return Buffer.from(data).toString("base64");
+
+  // Remove padding to match libsodium's to_base64 behavior
+  return base64.replace(/=+$/, "");
 }
